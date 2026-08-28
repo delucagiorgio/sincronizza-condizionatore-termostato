@@ -1,168 +1,228 @@
-# Blueprint M4 — Sincronizza condizionatore con termostato
+# Sync an air conditioner with a room thermostat
 
-File: `sincronizza_condizionatore_con_termostato.yaml`
+A Home Assistant blueprint that makes a split air conditioner follow the room
+thermostat, so the thermostat stays the single place you touch.
 
-Sostituisce le quattro automazioni gemelle `gestione_condizionatore_*`
-(rilievo **M4** dell'audit) con una sola definizione parametrica.
+Useful when a room has both: a wall thermostat you actually like using, and an
+AC unit whose app or remote you don't. Set the thermostat, the AC follows.
 
-## Cosa cambia rispetto alle quattro automazioni attuali
+---
 
-| | Prima | Con il blueprint |
-|---|---|---|
-| Definizioni | 4 automazioni, ~600 righe | 1 blueprint + 4 istanze |
-| Guard sul setpoint | presente in 3 su 4 — **manca al soggiorno** | presente per costruzione, in tutte |
-| Riferimenti | `device_id` in trigger e condizioni | solo `entity_id` (sana anche **M3** per queste quattro) |
-| Ordine dei blocchi | divergente fra studio e le altre | unico |
+## What it does
 
-Il comportamento è identico: gli stessi 6 trigger, gli stessi 5 rami, lo
-stesso preset `away` in assenza. L'unica differenza di runtime è che il
-soggiorno smette di scrivere il setpoint quando è già corretto.
+Four rules, one automation per room.
 
-## Dove vive questo file
+| When | What happens |
+|---|---|
+| Thermostat set to `off` / `heat` / `cool` | The AC mirrors the mode |
+| Thermostat target temperature changes | The AC target temperature follows |
+| Window opens | The AC is switched off |
+| Window closes | The AC is switched back on — unless the thermostat was turned off meanwhile |
+| House is empty and the thermostat is switched on | The thermostat is moved to its `away` preset |
+| House is occupied and the thermostat is switched on while still in `away` | The thermostat is moved back to your normal preset |
 
-Repository: **https://github.com/delucagiorgio/sincronizza-condizionatore-termostato**
-(pubblico, un file per cartella). Questa è la sorgente di verità; il file
-dentro Home Assistant ne è una copia.
+Two details that are easy to get wrong and are handled here:
 
-Il repository è pubblico per una ragione precisa e non per distrazione:
-**Home Assistant non può importare da un repository privato.** L'import
-scarica l'URL senza credenziali — non esiste un punto, né nella UI né
-nell'API, in cui passare un token — quindi un raw URL privato risponde 404,
-e i raw URL firmati che GitHub genera (`?token=…`) scadono e vengono
-invalidati a ogni push. Pubblico significa quindi «il pulsante Re-import
-funziona per sempre».
+- **The target temperature is written only when it actually differs** from the
+  value already set on the AC. Without that guard, a thermostat that reports
+  small fluctuations produces a stream of redundant commands to the AC.
+- **Everything is referenced by `entity_id`, never `device_id`.** Device IDs
+  change when you remove and re-pair a device, and every automation that used
+  them breaks silently. Entity IDs survive, and Home Assistant tells you when
+  one changes.
 
-Cosa c'è di esposto: un YAML interamente parametrico. L'unico valore
-concreto è il default `input_select.presenza_casa`. Gli entity_id delle
-stanze non sono qui — vivono nelle quattro istanze, che stanno dentro HA e
-non vengono pubblicate. **Prima di aggiungere qualsiasi file a questo
-repository, ricontrollare che non contenga URL Nabu Casa, token o
-indirizzi.**
+---
 
-## Installazione e aggiornamento
+## Requirements
 
-Importa da questo URL, o incollalo in **Impostazioni → Automazioni e scene
-→ Blueprint → Importa blueprint**:
+You need four things. The blueprint's selectors will only offer you valid
+candidates, but it's worth checking before you start.
+
+**1. A thermostat exposed as a `climate` entity** that supports:
+- the `off`, `heat` and `cool` HVAC modes
+- `preset_mode`, including an `away` preset and a normal one
+
+**2. An air conditioner exposed as a `climate` entity** that supports
+`climate.set_hvac_mode` and `climate.set_temperature`.
+
+**3. A window sensor** — a `binary_sensor` with `device_class: window`. Many
+smart thermostats expose one themselves (an open-window detection based on a
+temperature drop); a separate contact sensor works just as well. If your sensor
+shows up without the right device class, set it in the entity settings under
+*Show as*, otherwise the blueprint's picker won't offer it.
+
+**4. An `input_select` helper for presence**, with at least two options — one
+of which means "nobody home". Whatever drives that helper (person entities,
+device trackers, a manual switch) is outside the scope of this blueprint.
+
+---
+
+## Installation
+
+**Settings → Automations & scenes → Blueprints → Import blueprint**, then paste:
 
 ```
 https://github.com/delucagiorgio/sincronizza-condizionatore-termostato/blob/main/thermostat_ac_sync_blueprint/sincronizza_condizionatore_con_termostato.yaml
 ```
 
-È lo stesso valore scritto in `source_url`, quindi il pulsante **«Re-import
-blueprint»** della UI ripesca sempre l'ultima versione di `main`: per
-distribuire una modifica basta fare push.
+Requires Home Assistant **2024.10.0** or newer — the blueprint uses the plural
+`triggers:` / `actions:` keys and the `action:` key inside steps.
 
-Attenzione a una cosa sola: HA ricava il nome della sottocartella
-dall'URL di import, quindi cambiando sorgente il `path` del blueprint
-cambia. Ogni istanza memorizza quel `path`, perciò un cambio di sorgente
-richiede di aggiornare tutte le istanze e cancellare il blueprint vecchio.
+---
 
-## Le quattro istanze
+## Inputs
 
-Entità verificate esistenti il 28/08/2026.
+### Room entities
 
-| Istanza | `termostato` | `condizionatore` | `sensore_finestra` |
-|---|---|---|---|
-| Soggiorno | `climate.termostato_soggiorno` | `climate.condizionatore_soggiorno` | `binary_sensor.termostato_soggiorno_windowopened` |
-| Cameretta | `climate.termostato_cameretta` | `climate.condizionatore_cameretta` | `binary_sensor.termostato_cameretta_windowopened` |
-| Studio | `climate.termostato_studio` | `climate.condizionatore_studio` | `binary_sensor.termostato_studio_windowopened` |
-| Camera | `climate.termostato_camera` | `climate.condizionatore_camera` | `binary_sensor.termostato_camera_windowopened` |
-
-I tre input della sezione «Presenza in casa» — `helper_presenza`,
-`stato_assenti` e `preset_presenza` — hanno già i valori giusti come default
-(`input_select.presenza_casa`, `Assenti`, `custom`): non vanno toccati.
-
-Nota: fino al 28/08/2026 il condizionatore del soggiorno era
-`climate.condizionatore_soggiorno_2` — la trappola del rilievo A1. Il suffisso
-segnalava che alla creazione la forma senza `_2` era occupata; da chi, non è
-verificabile oggi, perché il registry conserva solo lo stato attuale.
-Il 28/08/2026 la forma senza suffisso risultava libera, l'entità è stata
-rinominata in `climate.condizionatore_soggiorno` e i quattro consumatori
-(tre automazioni e una card) sono stati aggiornati: la tabella qui sopra è di
-nuovo simmetrica con le altre tre stanze.
-
-## Migrazione — completata il 28/08/2026
-
-| Stanza | Istanza blueprint | Automazione originale |
+| Input | Required | Notes |
 |---|---|---|
-| Studio | `automation.sincronizza_condizionatore_studio` — on | *cancellata* |
-| Cameretta | `automation.sincronizza_condizionatore_cameretta` — on | `gestione_condizionatore_cameretta` — **off** |
-| Camera | `automation.sincronizza_condizionatore_camera` — on | `gestione_condizionatore_camera` — **off** |
-| Soggiorno | `automation.sincronizza_condizionatore_soggiorno` — on | `gestione_condizionatore_soggiorno` — **off** |
+| **Thermostat** | yes | The source of truth |
+| **Air conditioner** | yes | The follower |
+| **Window sensor** | yes | `binary_sensor` with `device_class: window` |
 
-Lo studio è stato il pilota. Le tre originali rimaste sono in `off` e non
-cancellate, ciascuna con una `description` che dice perché e come tornare
-indietro. Vanno eliminate quando la rete di sicurezza non serve più.
+### Presence *(collapsed by default)*
 
-**Per tornare indietro su una stanza:** rimetti in `on` la vecchia e
-cancella l'istanza del blueprint. Nessun altro passo da annullare.
-
-## Il preset `away` che restava appeso — corretto il 28/08/2026
-
-Difetto reale, riprodotto sui dati del 22/08/2026 e corretto in questa
-versione del blueprint.
-
-La sequenza era questa:
-
-| Ora | Cosa succedeva | Preset | Setpoint |
+| Input | Required | Default | Notes |
 |---|---|---|---|
-| 17:46 | `presenza_casa` → `Assenti` | `custom` | 24 |
-| 17:56 | l'automazione di presenza mette `away` (i 10 min del suo `for:`) | `away` | 25 |
-| 18:00 | lo **Scheduler** spegne il termostato | `away` | 25 |
-| 19:57 | `presenza_casa` → `Casa` | `away` | 25 |
-| 19:58 | il termostato è ancora spento, e ancora in `away` | `away` | 25 |
+| **Presence helper** | yes | — | Your `input_select` |
+| **Value that means "nobody home"** | no | `Away` | Must match one of the helper's options exactly, case included |
+| **Preset to restore when the house is occupied** | no | `comfort` | Whatever your thermostat calls its normal preset |
 
-La causa è la guardia nel ramo «Casa» dell'automazione di presenza:
-`if not (termostato è off) → set custom`. Un termostato **spento** al momento
-del rientro viene saltato, e nulla rimette `custom` — quel ramo scatta solo
-sulla transizione, che è già avvenuta. Alla riaccensione successiva il
-termostato riparte alla temperatura di assenza.
+That last one varies a lot by brand — `comfort`, `home`, `custom`, `manual`.
+Open your thermostat entity, look at its `preset_modes` attribute, and use the
+value you see there. Getting it wrong doesn't break anything: the service call
+simply fails and is logged.
 
-Lo Scheduler rende la cosa quasi garantita invece che rara: spegne cameretta
-e studio alle 18:00 e la camera alle 20:00, tutti i giorni, senza condizioni.
+---
 
-**La correzione** è il blocco «A casa, riaccendendo il termostato, esci dal
-preset away»: scatta sui trigger `heat`, `cool` e `window_closed`, solo se
-la casa è occupata e solo se il preset è ancora `away`. Un `comfort` o uno
-`sleep` scelti a mano restano intatti, e un termostato spento non viene mai
-toccato.
+## One automation per room
 
-Sbavatura da conoscere: quando il preset torna a `custom` il termostato
-ripristina il proprio setpoint e lo comunica un istante dopo, quindi la
-prima esecuzione può scrivere sul condizionatore ancora il valore di `away`.
-Il cambio di attributo fa partire subito una seconda esecuzione che corregge.
-Converge da solo, al costo di una scrittura in più.
+Create one instance per room. The presence inputs are the same in all of them;
+only the three room entities change.
 
-## Limite noto: la sincronizzazione è a senso unico
+Nothing stops you from pointing two instances at the same thermostat, but
+there's no reason to — one instance already handles every rule for that room.
 
-Il blueprint replica termostato → condizionatore. **Un comando dato
-direttamente al condizionatore non torna indietro al termostato.**
+---
 
-Non è una svista del blueprint: è il comportamento delle quattro
-automazioni originali, riprodotto fedelmente. Ma il divario si vede: al
-28/08/2026 tutti e quattro i condizionatori erano in `dry` con i quattro
-termostati in `cool`.
+## Tested with
 
-Prima di aggiungere il senso inverso servono quattro decisioni, perché i
-due dispositivi non sono equivalenti:
+This is the setup the blueprint was written against and has been running on.
+It is not a compatibility list: anything that satisfies the requirements above
+should work, and anything that doesn't is worth reporting.
 
-| | Termostato (Meross) | Condizionatore (Gree) |
+| | |
+|---|---|
+| **Home Assistant** | Core 2026.8.3, Home Assistant OS 18.2 (Python 3.14.6) |
+| **Thermostat** | Meross MTS200B — hardware 7.0.0, firmware 7.6.14 |
+| **Thermostat integration** | [Meross LAN](https://github.com/krahabb/meross_lan) v5.8.0 (HACS, local polling) |
+| **Air conditioner** | Gree split units, Gree LAN protocol |
+| **AC integration** | [Gree A/C](https://github.com/RobHofmann/HomeAssistant-GreeClimateComponent) v4.0.1 (HACS) |
+| **Window sensor** | `binary_sensor.*_windowopened`, exposed by the MTS200B itself |
+| **Presence** | A two-option `input_select` |
+| **Scale** | 4 rooms, 4 instances, in production since 2026-08-28 |
+
+Relevant capabilities of that pair, because they explain the caveats below:
+
+| | Thermostat (MTS200B) | AC (Gree) |
 |---|---|---|
-| Modalità | `off`, `heat`, `cool` | `auto`, `cool`, `dry`, `fan_only`, `heat`, `off` (+ `heat_cool` sul soggiorno) |
-| Setpoint | 5–35 °C, passo **0,5** | 16–30 °C, passo **1** |
-| Preset | custom, comfort, sleep, away, auto | nessuno |
-| Aggiornamento | immediato | **polling a 60 s** |
+| HVAC modes | `off`, `heat`, `cool` | `auto`, `cool`, `dry`, `fan_only`, `heat`, `off` |
+| Target range | 5–35 °C | 16–30 °C |
+| Target step | **0.5 °C** | **1 °C** |
+| Presets | `custom`, `comfort`, `sleep`, `away`, `auto` | none |
+| State updates | immediate | **polled, ~60 s** |
 
-1. **Modalità non mappabili.** `dry`, `fan_only`, `auto` e `heat_cool` non
-   esistono sul termostato. Mapparle su `off` è pericoloso: spegnerebbe il
-   termostato, che per la regola diretta spegnerebbe il condizionatore
-   uno o due secondi dopo aver ricevuto il comando.
-2. **Ping-pong sul setpoint.** Passo 0,5 contro passo 1: un 21,5 sul
-   termostato diventa 21 o 22 sul condizionatore, e il ritorno
-   riscriverebbe 21 sul termostato cambiando in silenzio la tua scelta.
-   Serve una tolleranza.
-3. **Il preset `away`.** Il ritorno del setpoint sovrascriverebbe il
-   preset che la regola di assenza ha appena impostato.
-4. **`unavailable`.** I Gree cadono a intermittenza: il ritorno deve
-   ignorare `unavailable` e `unknown`, o proverebbe a scriverli sul
-   termostato.
+---
+
+## Things to know before you rely on it
+
+**Synchronisation is one-way.** The thermostat drives the AC, never the
+reverse. Change the AC from its remote or from a dashboard card and the
+thermostat won't notice. Making it bidirectional is not a matter of adding
+triggers — see the section below.
+
+**Mismatched temperature steps get rounded.** If your thermostat steps in
+0.5 °C and your AC in 1 °C, a target of 21.5 °C reaches the AC as 21 or 22.
+The two then disagree, harmlessly but visibly. Same for range: a thermostat
+set to 5 °C for frost protection will clamp to the AC's minimum.
+
+**A polled AC reacts with a delay.** With an integration that polls rather than
+pushes, the AC's state in Home Assistant can lag its real state by up to the
+poll interval. The blueprint's guards read that state, so a command issued
+while the cached value is stale may be skipped or repeated once.
+
+**The window rules assume the window sensor belongs to the room.** If your
+thermostat's open-window detection is temperature-based, it may fire late, or
+not at all in mild weather.
+
+---
+
+## Why "leave the away preset" is its own rule
+
+The obvious way to handle presence is a single automation that sets `away` on
+every thermostat when the house empties, and clears it when someone comes back.
+That has a hole in it, and it is not a rare one.
+
+The clearing rule almost always carries a guard like *"only if the thermostat
+is not off"* — sensible, since you don't want to wake a thermostat that is
+deliberately off. But if the thermostat happens to be **off at the moment you
+come home** — because a schedule switched it off while you were out, which for
+most people is a daily occurrence — it is skipped. Nothing clears `away`
+afterwards, because the arrival transition has already passed. The preset stays
+on the device.
+
+The next time you switch that thermostat on, it starts at the away temperature
+instead of yours, and the AC dutifully follows it there.
+
+This blueprint closes the hole from the other side: it clears `away` **at the
+moment the thermostat is switched on**, not at the moment you arrive. It only
+acts when the house is occupied, only when the preset is still `away`, and
+never touches a thermostat that is off — so a `comfort` or `sleep` you chose
+yourself survives untouched.
+
+One rough edge worth knowing: when the preset changes, the thermostat restores
+its own target temperature and reports it a moment later. The first run may
+therefore still push the away temperature to the AC, and the resulting
+attribute change immediately triggers a second run that corrects it. It settles
+on its own, at the cost of one extra command.
+
+---
+
+## Why bidirectional sync isn't offered
+
+It looks like a small addition. It isn't, and the reasons are worth stating so
+you can decide for your own hardware.
+
+**Half the AC's modes don't exist on a thermostat.** `dry`, `fan_only` and
+`auto` have no counterpart in `off` / `heat` / `cool`. And the tempting
+mapping — *"anything that isn't heat or cool means off"* — is the one that
+breaks things: it would switch the thermostat off, which by the forward rule
+switches the AC off a second after you asked it for dry mode.
+
+**Writing back the target temperature fights the rounding.** With mismatched
+steps, your 21.5 °C becomes 21 °C on the AC, and a return path would then write
+21 °C back onto the thermostat — silently discarding what you set. A tolerance
+is required, not optional.
+
+**A return path fights the presence rules.** Writing the target temperature
+back to the thermostat overwrites whatever preset the presence logic just
+applied.
+
+**Unavailable is a value too.** Integrations drop out. A return path has to
+ignore `unavailable` and `unknown` explicitly, or it will try to write them.
+
+None of this is unsolvable — but each point is a decision about how you want
+your house to behave, not a line of YAML. The alternative worth considering
+first is keeping a single source of truth: drive everything from the
+thermostat, and hide or make read-only the AC's own controls in your dashboard.
+
+---
+
+## Updating
+
+The blueprint's `source_url` points at this repository, so **Re-import
+blueprint** in the Home Assistant UI always fetches the current version of
+`main`. Existing automations are reloaded automatically and keep their inputs.
+
+New inputs are always added with a default, so a re-import never requires
+editing existing automations.

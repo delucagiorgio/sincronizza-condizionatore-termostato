@@ -1,98 +1,103 @@
 blueprint:
-  name: Sincronizza condizionatore con termostato
+  name: Sync an air conditioner with a room thermostat
   description: >-
-    Replica sul condizionatore della stanza la modalità e il setpoint del
-    termostato, spegne il condizionatore quando la finestra si apre e lo
-    riaccende quando si richiude, e porta il termostato in preset "away"
-    quando la casa risulta vuota.
+    Makes a split air conditioner follow the room thermostat, so the
+    thermostat stays the single place you touch.
 
-    Sostituisce le quattro automazioni gemelle "Gestione condizionatore
-    <stanza>" (rilievo M4 dell'audit): stessa logica, una sola definizione.
-    Il setpoint viene scritto solo quando è davvero diverso da quello già
-    attivo sul condizionatore — il guard che nella versione del soggiorno
-    era assente e che qui vale per tutte le istanze.
+    Four rules. The AC mirrors the thermostat's mode (off / heat / cool) and
+    its target temperature. Opening the window switches the AC off, closing
+    it switches the AC back on — unless the thermostat was turned off in the
+    meantime. When the house is empty and the thermostat is switched on, the
+    thermostat is moved to its "away" preset. When the house is occupied and
+    the thermostat is switched on while still sitting in "away", it is moved
+    back to your normal preset.
 
-    Quando invece la casa è occupata e il termostato viene acceso mentre
-    è ancora in "away", il preset torna a quello normale. È la metà mancante
-    della regola di presenza: senza, "away" resta appeso al termostato dopo
-    un'assenza durante la quale è stato spento — da uno Scheduler, per
-    esempio — e la volta dopo il termostato riparte alla temperatura di
-    assenza invece che alla tua.
+    That last rule is the one people usually miss. A presence automation
+    that only clears "away" on arrival will skip a thermostat that happens
+    to be off at that moment — for instance because a schedule turned it off
+    while you were out — and "away" then stays stuck on the device. The next
+    time you switch the thermostat on it starts at the away temperature
+    instead of yours.
 
-    Il corpo usa esclusivamente entity_id: nessun device_id, quindi
-    l'automazione sopravvive alla rimozione e al riabbinamento di un
-    dispositivo (rilievo M3).
+    The target temperature is written to the AC only when it actually
+    differs from the value already set, so a thermostat that reports small
+    changes does not produce a stream of redundant commands.
+
+    Everything is referenced by entity_id, never device_id, so the
+    automation survives removing and re-pairing a device.
+
+    Synchronisation is one-way, thermostat to AC. See the README for why the
+    reverse direction is not trivial.
   domain: automation
-  author: Audit impianto Home Assistant — rilievo M4
+  author: delucagiorgio
   source_url: https://github.com/delucagiorgio/sincronizza-condizionatore-termostato/blob/main/thermostat_ac_sync_blueprint/sincronizza_condizionatore_con_termostato.yaml
   homeassistant:
     min_version: "2024.10.0"
   input:
     stanza:
-      name: Entità della stanza
+      name: Room entities
       icon: mdi:home-thermometer
       input:
         termostato:
-          name: Termostato
+          name: Thermostat
           description: >-
-            Il termostato della stanza. È la sorgente della verità: la sua
-            modalità (off/heat/cool) e il suo setpoint vengono replicati sul
-            condizionatore.
+            The room thermostat. It is the source of truth: its mode
+            (off/heat/cool) and its target temperature are mirrored onto the
+            air conditioner.
           selector:
             entity:
               filter:
                 domain: climate
         condizionatore:
-          name: Condizionatore
-          description: Il condizionatore che deve seguire il termostato.
+          name: Air conditioner
+          description: The air conditioner that has to follow the thermostat.
           selector:
             entity:
               filter:
                 domain: climate
         sensore_finestra:
-          name: Sensore finestra
+          name: Window sensor
           description: >-
-            Quando si apre, il condizionatore viene spento. Quando si
-            richiude, viene riacceso — ma solo se nel frattempo il termostato
-            non è stato spento.
+            When it opens, the air conditioner is switched off. When it
+            closes, the air conditioner is switched back on — but only if the
+            thermostat was not turned off in the meantime. Must be a
+            binary_sensor with device class "window".
           selector:
             entity:
               filter:
                 domain: binary_sensor
                 device_class: window
     presenza:
-      name: Presenza in casa
+      name: Presence
       icon: mdi:account-question
       collapsed: true
       input:
         helper_presenza:
-          name: Helper di presenza
+          name: Presence helper
           description: >-
-            L'helper che indica se la casa è occupata. È lo stesso per tutte
-            le stanze, perciò è già preimpostato.
-          default: input_select.presenza_casa
+            An input_select that tells whether the house is occupied. The
+            same helper is normally shared by every room.
           selector:
             entity:
               filter:
                 domain: input_select
         stato_assenti:
-          name: Valore che indica casa vuota
+          name: Value that means "nobody home"
           description: >-
-            Il valore dell'helper corrispondente all'assenza. Quando l'helper
-            vale questo e il termostato viene acceso (o la finestra
-            richiusa), il termostato passa al preset "away".
-          default: Assenti
+            The option of the presence helper that stands for absence. Must
+            match one of the helper's options exactly, including case.
+          default: Away
           selector:
             text:
         preset_presenza:
-          name: Preset da ripristinare quando la casa è occupata
+          name: Preset to restore when the house is occupied
           description: >-
-            Il preset "normale" dell'impianto: quello che il termostato deve
-            avere quando in casa c'è qualcuno. Serve a uscire da "away". Se il
-            termostato viene acceso mentre la casa è occupata e si trova
-            ancora in "away", ci viene riportato — e solo in quel caso: un
-            "comfort" o uno "sleep" scelti a mano restano intatti.
-          default: custom
+            Whatever your thermostat calls its normal, someone-is-home preset
+            — "comfort", "home", "custom", "manual", depending on the brand.
+            It is only ever applied when the thermostat is switched on while
+            still in "away": a preset you chose yourself, such as "sleep", is
+            left untouched.
+          default: comfort
           selector:
             text:
 
@@ -108,39 +113,39 @@ triggers:
     entity_id: !input termostato
     to: "off"
     id: "off"
-    alias: Termostato spento
+    alias: Thermostat switched off
   - trigger: state
     entity_id: !input termostato
     to: heat
     id: heat
-    alias: Termostato in riscaldamento
+    alias: Thermostat set to heating
   - trigger: state
     entity_id: !input termostato
     to: cool
     id: cool
-    alias: Termostato in raffrescamento
+    alias: Thermostat set to cooling
   - trigger: state
     entity_id: !input termostato
     attribute: temperature
     id: temperature
-    alias: Cambio setpoint sul termostato
+    alias: Thermostat target temperature changed
   - trigger: state
     entity_id: !input sensore_finestra
     to: "on"
     id: window_open
-    alias: Finestra aperta
+    alias: Window opened
   - trigger: state
     entity_id: !input sensore_finestra
     to: "off"
     id: window_closed
-    alias: Finestra chiusa
+    alias: Window closed
 
 conditions: []
 
 actions:
-  - alias: Replica la modalità del termostato sul condizionatore
+  - alias: Mirror the thermostat mode onto the air conditioner
     choose:
-      - alias: Spegnimento
+      - alias: Switch off
         conditions:
           - condition: trigger
             id:
@@ -150,7 +155,7 @@ actions:
             target:
               entity_id: !input condizionatore
 
-      - alias: Riscaldamento
+      - alias: Heating
         conditions:
           - condition: trigger
             id:
@@ -162,7 +167,7 @@ actions:
             data:
               hvac_mode: heat
 
-      - alias: Raffrescamento
+      - alias: Cooling
         conditions:
           - condition: trigger
             id:
@@ -174,12 +179,12 @@ actions:
             data:
               hvac_mode: cool
 
-      - alias: Finestra aperta
+      - alias: Window opened
         conditions:
           - condition: trigger
             id:
               - window_open
-          - alias: Solo se il condizionatore non è già spento
+          - alias: Only if the air conditioner is not already off
             condition: not
             conditions:
               - condition: state
@@ -190,12 +195,12 @@ actions:
             target:
               entity_id: !input condizionatore
 
-      - alias: Finestra chiusa
+      - alias: Window closed
         conditions:
           - condition: trigger
             id:
               - window_closed
-          - alias: Solo se il termostato non è spento
+          - alias: Only if the thermostat is not off
             condition: not
             conditions:
               - condition: state
@@ -206,7 +211,7 @@ actions:
             target:
               entity_id: !input condizionatore
 
-  - alias: In assenza porta il termostato in preset away
+  - alias: Nobody home — move the thermostat to the away preset
     if:
       - condition: state
         entity_id: !input helper_presenza
@@ -223,9 +228,9 @@ actions:
         data:
           preset_mode: away
 
-  - alias: A casa, riaccendendo il termostato, esci dal preset away
+  - alias: Someone home — leave the away preset when the thermostat comes back on
     if:
-      - alias: Solo se la casa è occupata
+      - alias: Only while the house is occupied
         condition: not
         conditions:
           - condition: state
@@ -236,7 +241,7 @@ actions:
           - heat
           - cool
           - window_closed
-      - alias: Solo se è rimasto appeso ad away, non tocca comfort o sleep
+      - alias: Only if away is still stuck on it — never touches a preset you chose
         condition: state
         entity_id: !input termostato
         attribute: preset_mode
@@ -248,14 +253,14 @@ actions:
         data:
           preset_mode: !input preset_presenza
 
-  - alias: Allinea il setpoint del condizionatore a quello del termostato
+  - alias: Align the air conditioner target temperature with the thermostat
     if:
       - condition: trigger
         id:
           - temperature
           - heat
           - cool
-      - alias: Solo se il valore da impostare è diverso da quello già attivo
+      - alias: Only when the value to write differs from the one already set
         condition: template
         value_template: >-
           {% set th = state_attr(termostato, 'temperature') %}
