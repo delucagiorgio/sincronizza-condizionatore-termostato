@@ -151,6 +151,16 @@ pushes, the AC's state in Home Assistant can lag its real state by up to the
 poll interval. The blueprint's guards read that state, so a command issued
 while the cached value is stale may be skipped or repeated once.
 
+**Some thermostats echo a stale state for a moment.** Right after a mode
+command, the tested unit reported its *previous* mode once before settling on
+the new one. Because the blueprint triggers on mode changes, that echo starts
+an extra run: switching the thermostat on produced a brief `off` → `on` pair on
+the AC, about half a second apart, before everything settled correctly.
+`mode: queued` makes the runs serialise, so the end state is always right — but
+the AC receives two commands it didn't need. If yours dislikes that, add
+`for: "00:00:02"` to the three mode triggers to debounce the echo, at the cost
+of a two-second delay on every mode change.
+
 **The window rules assume the window sensor belongs to the room.** If your
 thermostat's open-window detection is temperature-based, it may fire late, or
 not at all in mild weather.
