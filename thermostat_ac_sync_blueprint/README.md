@@ -20,45 +20,42 @@ soggiorno smette di scrivere il setpoint quando è già corretto.
 
 ## Dove vive questo file
 
-Questo repository **privato** è la sorgente di verità del blueprint. Il file
-installato dentro Home Assistant ne è una copia.
+Repository: **https://github.com/delucagiorgio/sincronizza-condizionatore-termostato**
+(pubblico, un file per cartella). Questa è la sorgente di verità; il file
+dentro Home Assistant ne è una copia.
 
-Attenzione a una conseguenza che non è ovvia: **Home Assistant non può
-importare da un repository privato.** L'import scarica l'URL senza
-credenziali — non esiste un punto, né nella UI né nell'API, in cui passare
-un token — quindi un raw URL privato risponde 404, e i raw URL firmati che
-GitHub genera (`?token=…`) scadono e vengono invalidati a ogni push.
+Il repository è pubblico per una ragione precisa e non per distrazione:
+**Home Assistant non può importare da un repository privato.** L'import
+scarica l'URL senza credenziali — non esiste un punto, né nella UI né
+nell'API, in cui passare un token — quindi un raw URL privato risponde 404,
+e i raw URL firmati che GitHub genera (`?token=…`) scadono e vengono
+invalidati a ogni push. Pubblico significa quindi «il pulsante Re-import
+funziona per sempre».
 
-Il deploy verso HA resta quindi manuale. Le due vie sono descritte sotto.
+Cosa c'è di esposto: un YAML interamente parametrico. L'unico valore
+concreto è il default `input_select.presenza_casa`. Gli entity_id delle
+stanze non sono qui — vivono nelle quattro istanze, che stanno dentro HA e
+non vengono pubblicate. **Prima di aggiungere qualsiasi file a questo
+repository, ricontrollare che non contenga URL Nabu Casa, token o
+indirizzi.**
 
-## Installazione — fatta il 28/08/2026
+## Installazione e aggiornamento
 
-Il blueprint **è installato** nell'istanza, importato via URL. HA lo ha
-salvato in:
-
-```
-blueprints/automation/192.168.68.130/sincronizza_condizionatore_con_termostato.yaml
-```
-
-La sottocartella prende il nome dall'host dell'URL di import: è brutta ma
-innocua. Rinominarla richiede di spostare il file a mano sulla macchina HA
-e va fatto **prima** di creare altre istanze, perché il `path` è
-memorizzato dentro ogni automazione che usa il blueprint.
-
-Il server HTTP che serviva il file era temporaneo, quindi **il pulsante
-«Re-import blueprint» della UI oggi fallisce**. Per riapplicare una
-modifica al file: rialza il server con il comando qui sotto e reimporta
-con `overwrite=true`, oppure sposta il `source_url` su un Gist pubblico.
+Importa da questo URL, o incollalo in **Impostazioni → Automazioni e scene
+→ Blueprint → Importa blueprint**:
 
 ```
-! nohup python3 -m http.server 8765 --directory /home/giorgio/claude_home_assistant/blueprints --bind 0.0.0.0 > /tmp/bp-server.log 2>&1 &
+https://github.com/delucagiorgio/sincronizza-condizionatore-termostato/blob/main/thermostat_ac_sync_blueprint/sincronizza_condizionatore_con_termostato.yaml
 ```
 
-Alternativa senza porte aperte: copia il file in
-`config/blueprints/automation/audit/` sulla macchina HA (app File editor,
-Studio Code Server o Samba), poi **Impostazioni → Automazioni e scene →
-Blueprint → Ricarica blueprint**. La sottocartella serve: HA non carica
-blueprint messi direttamente in `blueprints/automation/`.
+È lo stesso valore scritto in `source_url`, quindi il pulsante **«Re-import
+blueprint»** della UI ripesca sempre l'ultima versione di `main`: per
+distribuire una modifica basta fare push.
+
+Attenzione a una cosa sola: HA ricava il nome della sottocartella
+dall'URL di import, quindi cambiando sorgente il `path` del blueprint
+cambia. Ogni istanza memorizza quel `path`, perciò un cambio di sorgente
+richiede di aggiornare tutte le istanze e cancellare il blueprint vecchio.
 
 ## Le quattro istanze
 
@@ -71,8 +68,9 @@ Entità verificate esistenti il 28/08/2026.
 | Studio | `climate.termostato_studio` | `climate.condizionatore_studio` | `binary_sensor.termostato_studio_windowopened` |
 | Camera | `climate.termostato_camera` | `climate.condizionatore_camera` | `binary_sensor.termostato_camera_windowopened` |
 
-`helper_presenza` e `stato_assenti` hanno già i valori giusti come default
-(`input_select.presenza_casa` / `Assenti`): non vanno toccati.
+I tre input della sezione «Presenza in casa» — `helper_presenza`,
+`stato_assenti` e `preset_presenza` — hanno già i valori giusti come default
+(`input_select.presenza_casa`, `Assenti`, `custom`): non vanno toccati.
 
 Nota: fino al 28/08/2026 il condizionatore del soggiorno era
 `climate.condizionatore_soggiorno_2` — la trappola del rilievo A1. Il suffisso
@@ -98,6 +96,42 @@ indietro. Vanno eliminate quando la rete di sicurezza non serve più.
 
 **Per tornare indietro su una stanza:** rimetti in `on` la vecchia e
 cancella l'istanza del blueprint. Nessun altro passo da annullare.
+
+## Il preset `away` che restava appeso — corretto il 28/08/2026
+
+Difetto reale, riprodotto sui dati del 22/08/2026 e corretto in questa
+versione del blueprint.
+
+La sequenza era questa:
+
+| Ora | Cosa succedeva | Preset | Setpoint |
+|---|---|---|---|
+| 17:46 | `presenza_casa` → `Assenti` | `custom` | 24 |
+| 17:56 | l'automazione di presenza mette `away` (i 10 min del suo `for:`) | `away` | 25 |
+| 18:00 | lo **Scheduler** spegne il termostato | `away` | 25 |
+| 19:57 | `presenza_casa` → `Casa` | `away` | 25 |
+| 19:58 | il termostato è ancora spento, e ancora in `away` | `away` | 25 |
+
+La causa è la guardia nel ramo «Casa» dell'automazione di presenza:
+`if not (termostato è off) → set custom`. Un termostato **spento** al momento
+del rientro viene saltato, e nulla rimette `custom` — quel ramo scatta solo
+sulla transizione, che è già avvenuta. Alla riaccensione successiva il
+termostato riparte alla temperatura di assenza.
+
+Lo Scheduler rende la cosa quasi garantita invece che rara: spegne cameretta
+e studio alle 18:00 e la camera alle 20:00, tutti i giorni, senza condizioni.
+
+**La correzione** è il blocco «A casa, riaccendendo il termostato, esci dal
+preset away»: scatta sui trigger `heat`, `cool` e `window_closed`, solo se
+la casa è occupata e solo se il preset è ancora `away`. Un `comfort` o uno
+`sleep` scelti a mano restano intatti, e un termostato spento non viene mai
+toccato.
+
+Sbavatura da conoscere: quando il preset torna a `custom` il termostato
+ripristina il proprio setpoint e lo comunica un istante dopo, quindi la
+prima esecuzione può scrivere sul condizionatore ancora il valore di `away`.
+Il cambio di attributo fa partire subito una seconda esecuzione che corregge.
+Converge da solo, al costo di una scrittura in più.
 
 ## Limite noto: la sincronizzazione è a senso unico
 

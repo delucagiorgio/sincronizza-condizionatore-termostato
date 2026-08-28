@@ -12,12 +12,19 @@ blueprint:
     attivo sul condizionatore — il guard che nella versione del soggiorno
     era assente e che qui vale per tutte le istanze.
 
+    Quando invece la casa è occupata e il termostato viene acceso mentre
+    è ancora in "away", il preset torna a quello normale. È la metà mancante
+    della regola di presenza: senza, "away" resta appeso al termostato dopo
+    un'assenza durante la quale è stato spento — da uno Scheduler, per
+    esempio — e la volta dopo il termostato riparte alla temperatura di
+    assenza invece che alla tua.
+
     Il corpo usa esclusivamente entity_id: nessun device_id, quindi
     l'automazione sopravvive alla rimozione e al riabbinamento di un
     dispositivo (rilievo M3).
   domain: automation
   author: Audit impianto Home Assistant — rilievo M4
-  source_url: http://192.168.68.130:8765/sincronizza_condizionatore_con_termostato.yaml
+  source_url: https://github.com/delucagiorgio/sincronizza-condizionatore-termostato/blob/main/thermostat_ac_sync_blueprint/sincronizza_condizionatore_con_termostato.yaml
   homeassistant:
     min_version: "2024.10.0"
   input:
@@ -75,6 +82,17 @@ blueprint:
             vale questo e il termostato viene acceso (o la finestra
             richiusa), il termostato passa al preset "away".
           default: Assenti
+          selector:
+            text:
+        preset_presenza:
+          name: Preset da ripristinare quando la casa è occupata
+          description: >-
+            Il preset "normale" dell'impianto: quello che il termostato deve
+            avere quando in casa c'è qualcuno. Serve a uscire da "away". Se il
+            termostato viene acceso mentre la casa è occupata e si trova
+            ancora in "away", ci viene riportato — e solo in quel caso: un
+            "comfort" o uno "sleep" scelti a mano restano intatti.
+          default: custom
           selector:
             text:
 
@@ -204,6 +222,31 @@ actions:
           entity_id: !input termostato
         data:
           preset_mode: away
+
+  - alias: A casa, riaccendendo il termostato, esci dal preset away
+    if:
+      - alias: Solo se la casa è occupata
+        condition: not
+        conditions:
+          - condition: state
+            entity_id: !input helper_presenza
+            state: !input stato_assenti
+      - condition: trigger
+        id:
+          - heat
+          - cool
+          - window_closed
+      - alias: Solo se è rimasto appeso ad away, non tocca comfort o sleep
+        condition: state
+        entity_id: !input termostato
+        attribute: preset_mode
+        state: away
+    then:
+      - action: climate.set_preset_mode
+        target:
+          entity_id: !input termostato
+        data:
+          preset_mode: !input preset_presenza
 
   - alias: Allinea il setpoint del condizionatore a quello del termostato
     if:
