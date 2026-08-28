@@ -1,0 +1,5 @@
+# nulla di generato vive qui: il repo contiene solo il blueprint e la sua documentazione
+*.log
+*.swp
+*~
+.DS_Store

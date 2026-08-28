@@ -1,0 +1,226 @@
+blueprint:
+  name: Sincronizza condizionatore con termostato
+  description: >-
+    Replica sul condizionatore della stanza la modalità e il setpoint del
+    termostato, spegne il condizionatore quando la finestra si apre e lo
+    riaccende quando si richiude, e porta il termostato in preset "away"
+    quando la casa risulta vuota.
+
+    Sostituisce le quattro automazioni gemelle "Gestione condizionatore
+    <stanza>" (rilievo M4 dell'audit): stessa logica, una sola definizione.
+    Il setpoint viene scritto solo quando è davvero diverso da quello già
+    attivo sul condizionatore — il guard che nella versione del soggiorno
+    era assente e che qui vale per tutte le istanze.
+
+    Il corpo usa esclusivamente entity_id: nessun device_id, quindi
+    l'automazione sopravvive alla rimozione e al riabbinamento di un
+    dispositivo (rilievo M3).
+  domain: automation
+  author: Audit impianto Home Assistant — rilievo M4
+  source_url: http://192.168.68.130:8765/sincronizza_condizionatore_con_termostato.yaml
+  homeassistant:
+    min_version: "2024.10.0"
+  input:
+    stanza:
+      name: Entità della stanza
+      icon: mdi:home-thermometer
+      input:
+        termostato:
+          name: Termostato
+          description: >-
+            Il termostato della stanza. È la sorgente della verità: la sua
+            modalità (off/heat/cool) e il suo setpoint vengono replicati sul
+            condizionatore.
+          selector:
+            entity:
+              filter:
+                domain: climate
+        condizionatore:
+          name: Condizionatore
+          description: Il condizionatore che deve seguire il termostato.
+          selector:
+            entity:
+              filter:
+                domain: climate
+        sensore_finestra:
+          name: Sensore finestra
+          description: >-
+            Quando si apre, il condizionatore viene spento. Quando si
+            richiude, viene riacceso — ma solo se nel frattempo il termostato
+            non è stato spento.
+          selector:
+            entity:
+              filter:
+                domain: binary_sensor
+                device_class: window
+    presenza:
+      name: Presenza in casa
+      icon: mdi:account-question
+      collapsed: true
+      input:
+        helper_presenza:
+          name: Helper di presenza
+          description: >-
+            L'helper che indica se la casa è occupata. È lo stesso per tutte
+            le stanze, perciò è già preimpostato.
+          default: input_select.presenza_casa
+          selector:
+            entity:
+              filter:
+                domain: input_select
+        stato_assenti:
+          name: Valore che indica casa vuota
+          description: >-
+            Il valore dell'helper corrispondente all'assenza. Quando l'helper
+            vale questo e il termostato viene acceso (o la finestra
+            richiusa), il termostato passa al preset "away".
+          default: Assenti
+          selector:
+            text:
+
+mode: queued
+max: 10
+
+variables:
+  termostato: !input termostato
+  condizionatore: !input condizionatore
+
+triggers:
+  - trigger: state
+    entity_id: !input termostato
+    to: "off"
+    id: "off"
+    alias: Termostato spento
+  - trigger: state
+    entity_id: !input termostato
+    to: heat
+    id: heat
+    alias: Termostato in riscaldamento
+  - trigger: state
+    entity_id: !input termostato
+    to: cool
+    id: cool
+    alias: Termostato in raffrescamento
+  - trigger: state
+    entity_id: !input termostato
+    attribute: temperature
+    id: temperature
+    alias: Cambio setpoint sul termostato
+  - trigger: state
+    entity_id: !input sensore_finestra
+    to: "on"
+    id: window_open
+    alias: Finestra aperta
+  - trigger: state
+    entity_id: !input sensore_finestra
+    to: "off"
+    id: window_closed
+    alias: Finestra chiusa
+
+conditions: []
+
+actions:
+  - alias: Replica la modalità del termostato sul condizionatore
+    choose:
+      - alias: Spegnimento
+        conditions:
+          - condition: trigger
+            id:
+              - "off"
+        sequence:
+          - action: climate.turn_off
+            target:
+              entity_id: !input condizionatore
+
+      - alias: Riscaldamento
+        conditions:
+          - condition: trigger
+            id:
+              - heat
+        sequence:
+          - action: climate.set_hvac_mode
+            target:
+              entity_id: !input condizionatore
+            data:
+              hvac_mode: heat
+
+      - alias: Raffrescamento
+        conditions:
+          - condition: trigger
+            id:
+              - cool
+        sequence:
+          - action: climate.set_hvac_mode
+            target:
+              entity_id: !input condizionatore
+            data:
+              hvac_mode: cool
+
+      - alias: Finestra aperta
+        conditions:
+          - condition: trigger
+            id:
+              - window_open
+          - alias: Solo se il condizionatore non è già spento
+            condition: not
+            conditions:
+              - condition: state
+                entity_id: !input condizionatore
+                state: "off"
+        sequence:
+          - action: climate.turn_off
+            target:
+              entity_id: !input condizionatore
+
+      - alias: Finestra chiusa
+        conditions:
+          - condition: trigger
+            id:
+              - window_closed
+          - alias: Solo se il termostato non è spento
+            condition: not
+            conditions:
+              - condition: state
+                entity_id: !input termostato
+                state: "off"
+        sequence:
+          - action: climate.turn_on
+            target:
+              entity_id: !input condizionatore
+
+  - alias: In assenza porta il termostato in preset away
+    if:
+      - condition: state
+        entity_id: !input helper_presenza
+        state: !input stato_assenti
+      - condition: trigger
+        id:
+          - heat
+          - cool
+          - window_closed
+    then:
+      - action: climate.set_preset_mode
+        target:
+          entity_id: !input termostato
+        data:
+          preset_mode: away
+
+  - alias: Allinea il setpoint del condizionatore a quello del termostato
+    if:
+      - condition: trigger
+        id:
+          - temperature
+          - heat
+          - cool
+      - alias: Solo se il valore da impostare è diverso da quello già attivo
+        condition: template
+        value_template: >-
+          {% set th = state_attr(termostato, 'temperature') %}
+          {% set ac = state_attr(condizionatore, 'temperature') %}
+          {{ th is not none and (ac is none or (th | float) != (ac | float)) }}
+    then:
+      - action: climate.set_temperature
+        target:
+          entity_id: !input condizionatore
+        data:
+          temperature: "{{ state_attr(termostato, 'temperature') }}"
